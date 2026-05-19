@@ -181,13 +181,7 @@ const addStory = (data) => {
         data: [],
       });
     }
-    if (!story.audioUrl) {
-      return reject({
-        status: 400,
-        message: "Audio file is required",
-        data: [],
-      });
-    }
+
     db.collection("stories")
       .insertOne(story)
       .then((result) => {
