@@ -1,7 +1,9 @@
 const { getDb } = require("../dbConfig/dbConnection");
 const { ObjectId } = require("mongodb");
-const bcrypt = require("bcryptjs");
+
 const jwt = require("jsonwebtoken");
+const utils = require("../utils/utils");
+const bcrypt = require("bcryptjs");
 
 const JWT_SECRET = process.env.JWT_SECRET || "storyland-secret-key-change-me";
 const JWT_EXPIRY = process.env.JWT_EXPIRY || "30d";
@@ -105,6 +107,7 @@ const sendOtp = (data) => {
   return new Promise((resolve, reject) => {
     const db = getDb();
     const mobile = data.mobile;
+
     if (!mobile || mobile.length !== 10) {
       return reject({
         status: 400,
@@ -113,57 +116,116 @@ const sendOtp = (data) => {
       });
     }
 
-    // Generate 6-digit OTP (in production, use a real SMS service)
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const otpExpiry = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
-
     db.collection("users")
-      .updateOne(
-        { mobile: mobile },
-        {
-          $set: {
-            mobile: mobile,
-            countryCode: data.countryCode || "+91",
-            otp: otp,
-            otpExpiry: otpExpiry,
-            updatedAt: new Date(),
-          },
-          $setOnInsert: {
-            name: "",
-            email: "",
-            role: "Reader",
-            status: "Active",
-            isPremium: false,
-            storiesPublished: 0,
-            storiesRead: 0,
-            favorites: [],
-            readingHistory: [],
-            createdAt: new Date(),
-          },
-        },
-        { upsert: true },
-      )
-      .then(() => {
-        // TODO: Integrate real SMS provider (Twilio / MSG91 / etc.)
-        console.log(`OTP for +91${mobile}: ${otp}`);
-        resolve({
-          status: 200,
-          message: "OTP sent successfully",
-          data: [
-            {
-              mobile,
-              // Don't send OTP in response in production; here for testing only
-              otp: process.env.NODE_ENV === "production" ? undefined : otp,
-            },
-          ],
-        });
+      .findOne({ mobile: mobile })
+      .then((result) => {
+        if (result) {
+          // Existing user - send OTP
+          utils
+            .sendOtp(mobile)
+            .then((result1) => {
+              console.log(
+                "result of otp sending message",
+                result1["sessionId"],
+              );
+              const token = jwt.sign(
+                { user_id: result["_id"], mobile: mobile },
+                process.env.JWT_KEY,
+                { expiresIn: process.env.expiresIn },
+              );
+              resolve({
+                status: 200,
+                message: "OTP sent successfully!",
+                data: [
+                  {
+                    token: token,
+                    name: result["name"] || "",
+                    user_id: result["_id"],
+                    sessionId: result1["sessionId"],
+                  },
+                ],
+              });
+            })
+            .catch((err) => {
+              console.log("error sending OTP", err);
+              reject({
+                status: 400,
+                message: "Unable to send OTP.",
+                data: [],
+              });
+            });
+        } else {
+          // New user - create then send OTP
+          db.collection("users")
+            .insertOne({
+              name: "",
+              email: "",
+              mobile: mobile,
+              countryCode: data.countryCode || "+91",
+              role: "Reader",
+              status: "Active",
+              isPremium: false,
+              storiesPublished: 0,
+              storiesRead: 0,
+              favorites: [],
+              readingHistory: [],
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .then((result1) => {
+              utils
+                .sendOtp(mobile)
+                .then((result) => {
+                  console.log(
+                    "result of otp sending message",
+                    result["sessionId"],
+                  );
+                  const token = jwt.sign(
+                    {
+                      user_id: result1["insertedId"],
+                      mobile: mobile,
+                    },
+                    process.env.JWT_KEY,
+                    { expiresIn: process.env.expiresIn },
+                  );
+                  resolve({
+                    status: 200,
+                    message: "OTP sent successfully!",
+                    data: [
+                      {
+                        token: token,
+                        name: "",
+                        user_id: result1["insertedId"],
+                        sessionId: result["sessionId"],
+                      },
+                    ],
+                  });
+                })
+                .catch((err) => {
+                  console.log("error sending OTP", err);
+                  reject({
+                    status: 400,
+                    message: "Unable to send OTP.",
+                    data: [],
+                  });
+                });
+            })
+            .catch((error) => {
+              console.log("error creating user", error);
+              reject({
+                status: 500,
+                message: "Unable to send OTP.",
+                data: [],
+              });
+            });
+        }
       })
-      .catch((error) => {
+      .catch((err) => {
+        console.log("error finding user", err);
         reject({
           status: 400,
-          message: "Unable to send OTP",
+          message: "Unable to send OTP.",
           data: [],
-          error: error.message,
         });
       });
   });
@@ -172,17 +234,23 @@ const sendOtp = (data) => {
 const verifyOtp = (data) => {
   return new Promise((resolve, reject) => {
     const db = getDb();
-    const { mobile, otp } = data;
-    if (!mobile || !otp) {
+    const { mobile, otp, sessionId } = data;
+
+    if (!mobile || !otp || !sessionId) {
       return reject({
         status: 400,
-        message: "Mobile and OTP are required",
+        message: "Mobile, OTP and sessionId are required",
         data: [],
       });
     }
 
-    db.collection("users")
-      .findOne({ mobile: mobile })
+    utils
+      .verifyOtp(data)
+      .then((result) => {
+        console.log("result of otp match", result);
+
+        return db.collection("users").findOne({ mobile: mobile });
+      })
       .then((user) => {
         if (!user) {
           return reject({
@@ -198,45 +266,36 @@ const verifyOtp = (data) => {
             data: [],
           });
         }
-        if (!user.otp || user.otp !== otp) {
-          return reject({
-            status: 401,
-            message: "Invalid OTP",
-            data: [],
-          });
-        }
-        if (new Date() > new Date(user.otpExpiry)) {
-          return reject({
-            status: 401,
-            message: "OTP has expired. Please request a new one.",
-            data: [],
-          });
-        }
-        // OTP valid - clear it, generate token
+
         return db
           .collection("users")
           .updateOne(
             { _id: user._id },
-            {
-              $unset: { otp: "", otpExpiry: "" },
-              $set: { lastLogin: new Date(), updatedAt: new Date() },
-            },
+            { $set: { lastLogin: new Date(), updatedAt: new Date() } },
           )
           .then(() => {
-            const token = generateToken(user);
+            const token = jwt.sign(
+              { user_id: user._id, mobile: mobile },
+              process.env.JWT_KEY,
+              { expiresIn: process.env.expiresIn },
+            );
+            const { password, ...safeUser } = user;
             resolve({
               status: 200,
-              message: "Login successful",
-              data: [{ user: sanitizeUser(user), token }],
+              message: "OTP verified successfully!",
+              data: [{ ...safeUser, token }],
             });
           });
       })
-      .catch((error) => {
+      .catch((err) => {
+        console.log("error verify OTP", err);
+        if (err && err.status) {
+          return reject(err);
+        }
         reject({
           status: 400,
-          message: "Unable to verify OTP",
+          message: "OTP incorrect.",
           data: [],
-          error: error.message,
         });
       });
   });
