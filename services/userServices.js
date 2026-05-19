@@ -1096,7 +1096,6 @@ const saveReadingProgress = (userId, data) => {
       )
       .then((result) => {
         if (result.matchedCount === 0) {
-          // No existing entry - push a new one
           return db.collection("users").updateOne(
             { _id: new ObjectId(userId) },
             {
@@ -1112,7 +1111,6 @@ const saveReadingProgress = (userId, data) => {
         return result;
       })
       .then(() => {
-        // Mark story as completed if progress >= 0.95
         if (entry.progress >= 0.95) {
           return db
             .collection("users")

@@ -313,7 +313,7 @@ module.exports = {
 
   saveReadingProgress: (req, res, next) => {
     userService
-      .saveReadingProgress({ userId: req.userId, ...req.body })
+      .saveReadingProgress(req.user.user_id, req.body)
       .then((result) => {
         res.status(result.status || 200).send(result);
       })

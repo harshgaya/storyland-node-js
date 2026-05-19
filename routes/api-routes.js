@@ -64,7 +64,7 @@ router.get(
   userController.getReadingHistory,
 );
 router.post(
-  "/reading-progress",
+  "/save-reading-progress",
 
   userController.saveReadingProgress,
 );
