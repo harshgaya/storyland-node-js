@@ -166,10 +166,12 @@ module.exports = {
         }),
       );
   },
-
   getStoryDetails: (req, res, next) => {
     userService
-      .getStoryDetails({ storyId: req.params.storyId })
+      .getStoryDetails({
+        storyId: req.params.storyId,
+        userId: req.user?.user_id || null,
+      })
       .then((result) => {
         res.status(result.status || 200).send(result);
       })

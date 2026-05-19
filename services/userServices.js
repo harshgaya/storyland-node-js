@@ -653,13 +653,23 @@ const getStoryDetails = (data) => {
   return new Promise((resolve, reject) => {
     const db = getDb();
     const storyId = data.storyId;
+    const userId = data.userId;
+
+    if (!storyId || !ObjectId.isValid(storyId)) {
+      return reject({
+        status: 400,
+        message: "Valid storyId is required",
+        data: [],
+      });
+    }
+
     db.collection("stories")
       .findOneAndUpdate(
         { _id: new ObjectId(storyId), status: "published" },
         { $inc: { views: 1 } },
         { returnDocument: "after" },
       )
-      .then((result) => {
+      .then(async (result) => {
         const story = result.value || result;
         if (!story) {
           return reject({
@@ -668,10 +678,54 @@ const getStoryDetails = (data) => {
             data: [],
           });
         }
+
+        // Attach user's reading progress and favorite status if logged in
+        let lastReadSentence = 0;
+        let totalSentences = 0;
+        let progress = 0;
+        let isFavorite = false;
+
+        if (userId && ObjectId.isValid(userId)) {
+          try {
+            const user = await db
+              .collection("users")
+              .findOne(
+                { _id: new ObjectId(userId) },
+                { projection: { readingHistory: 1, favorites: 1 } },
+              );
+
+            if (user) {
+              const history = (user.readingHistory || []).find(
+                (h) => h.storyId?.toString() === storyId.toString(),
+              );
+              if (history) {
+                lastReadSentence = history.lastReadSentence || 0;
+                totalSentences = history.totalSentences || 0;
+                progress = history.progress || 0;
+              }
+
+              const favorites = user.favorites || [];
+              isFavorite = favorites.some(
+                (f) => f?.toString() === storyId.toString(),
+              );
+            }
+          } catch (e) {
+            console.warn("Could not fetch user progress:", e.message);
+          }
+        }
+
         resolve({
           status: 200,
           message: "Story fetched",
-          data: [story],
+          data: [
+            {
+              ...story,
+              lastReadSentence,
+              totalSentences,
+              progress,
+              isFavorite,
+            },
+          ],
         });
       })
       .catch((error) => {
@@ -1004,10 +1058,27 @@ const getFavorites = (data) => {
    READING PROGRESS
    ============================================================ */
 
-const saveReadingProgress = (data) => {
+const saveReadingProgress = (userId, data) => {
   return new Promise((resolve, reject) => {
     const db = getDb();
-    const { userId, storyId, currentPage, totalPages, progress } = data;
+    const { storyId, currentPage, totalPages, progress } = data;
+
+    if (!storyId) {
+      return reject({
+        status: 400,
+        message: "storyId is required",
+        data: [],
+      });
+    }
+
+    const entry = {
+      storyId: storyId,
+      lastReadSentence: parseInt(currentPage) || 0,
+      totalSentences: parseInt(totalPages) || 0,
+      progress: parseFloat(progress) || 0,
+      updatedAt: new Date(),
+    };
+
     db.collection("users")
       .updateOne(
         {
@@ -1016,45 +1087,55 @@ const saveReadingProgress = (data) => {
         },
         {
           $set: {
-            "readingHistory.$.currentPage": currentPage,
-            "readingHistory.$.totalPages": totalPages,
-            "readingHistory.$.progress": progress,
-            "readingHistory.$.lastReadAt": new Date(),
+            "readingHistory.$.lastReadSentence": entry.lastReadSentence,
+            "readingHistory.$.totalSentences": entry.totalSentences,
+            "readingHistory.$.progress": entry.progress,
+            "readingHistory.$.updatedAt": entry.updatedAt,
           },
         },
       )
       .then((result) => {
         if (result.matchedCount === 0) {
-          // First time reading - push new entry
+          // No existing entry - push a new one
           return db.collection("users").updateOne(
             { _id: new ObjectId(userId) },
             {
               $push: {
                 readingHistory: {
-                  storyId,
-                  currentPage,
-                  totalPages,
-                  progress,
-                  lastReadAt: new Date(),
+                  ...entry,
+                  startedAt: new Date(),
                 },
               },
             },
           );
+        }
+        return result;
+      })
+      .then(() => {
+        // Mark story as completed if progress >= 0.95
+        if (entry.progress >= 0.95) {
+          return db
+            .collection("users")
+            .updateOne(
+              { _id: new ObjectId(userId) },
+              { $inc: { storiesRead: 1 } },
+            );
         }
       })
       .then(() => {
         resolve({
           status: 200,
           message: "Progress saved",
-          data: [],
+          data: [entry],
         });
       })
-      .catch((error) => {
+      .catch((err) => {
+        console.error("saveReadingProgress error:", err);
         reject({
           status: 400,
-          message: "Unable to save progress",
+          message: "Could not save progress",
           data: [],
-          error: error.message,
+          error: err.message,
         });
       });
   });
