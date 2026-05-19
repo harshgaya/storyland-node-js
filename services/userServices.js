@@ -1058,10 +1058,10 @@ const getFavorites = (data) => {
    READING PROGRESS
    ============================================================ */
 
-const saveReadingProgress = (userId, data) => {
+const saveReadingProgress = (data) => {
   return new Promise((resolve, reject) => {
     const db = getDb();
-    const { storyId, currentPage, totalPages, progress } = data;
+    const { storyId, currentPage, totalPages, progress, user_id } = data;
 
     if (!storyId) {
       return reject({
@@ -1070,19 +1070,27 @@ const saveReadingProgress = (userId, data) => {
         data: [],
       });
     }
+    if (!user_id || !ObjectId.isValid(user_id)) {
+      return reject({
+        status: 400,
+        message: "Valid user_id is required",
+        data: [],
+      });
+    }
 
+    const now = new Date();
     const entry = {
       storyId: storyId,
       lastReadSentence: parseInt(currentPage) || 0,
       totalSentences: parseInt(totalPages) || 0,
       progress: parseFloat(progress) || 0,
-      updatedAt: new Date(),
+      updatedAt: now,
     };
 
     db.collection("users")
       .updateOne(
         {
-          _id: new ObjectId(userId),
+          _id: new ObjectId(user_id),
           "readingHistory.storyId": storyId,
         },
         {
@@ -1097,12 +1105,12 @@ const saveReadingProgress = (userId, data) => {
       .then((result) => {
         if (result.matchedCount === 0) {
           return db.collection("users").updateOne(
-            { _id: new ObjectId(userId) },
+            { _id: new ObjectId(user_id) },
             {
               $push: {
                 readingHistory: {
                   ...entry,
-                  startedAt: new Date(),
+                  startedAt: now,
                 },
               },
             },
@@ -1112,12 +1120,17 @@ const saveReadingProgress = (userId, data) => {
       })
       .then(() => {
         if (entry.progress >= 0.95) {
-          return db
-            .collection("users")
-            .updateOne(
-              { _id: new ObjectId(userId) },
-              { $inc: { storiesRead: 1 } },
-            );
+          return db.collection("users").updateOne(
+            {
+              _id: new ObjectId(user_id),
+              "readingHistory.storyId": storyId,
+              "readingHistory.completedAt": { $exists: false },
+            },
+            {
+              $set: { "readingHistory.$.completedAt": now },
+              $inc: { storiesRead: 1 },
+            },
+          );
         }
       })
       .then(() => {
@@ -1128,7 +1141,7 @@ const saveReadingProgress = (userId, data) => {
         });
       })
       .catch((err) => {
-        console.error("saveReadingProgress error:", err);
+        console.log("saveReadingProgress error:", err);
         reject({
           status: 400,
           message: "Could not save progress",
@@ -1138,13 +1151,22 @@ const saveReadingProgress = (userId, data) => {
       });
   });
 };
-
 const getReadingHistory = (data) => {
   return new Promise((resolve, reject) => {
     const db = getDb();
+    const userId = data.userId;
+
+    if (!userId || !ObjectId.isValid(userId)) {
+      return reject({
+        status: 400,
+        message: "Valid user ID is required",
+        data: [],
+      });
+    }
+
     db.collection("users")
-      .findOne({ _id: new ObjectId(data.userId) })
-      .then((user) => {
+      .findOne({ _id: new ObjectId(userId) })
+      .then(async (user) => {
         if (!user) {
           return reject({
             status: 404,
@@ -1152,10 +1174,55 @@ const getReadingHistory = (data) => {
             data: [],
           });
         }
+
+        const history = user.readingHistory || [];
+        if (history.length === 0) {
+          return resolve({
+            status: 200,
+            message: "Reading history fetched",
+            data: [],
+          });
+        }
+
+        const storyIds = history
+          .map((h) => h.storyId)
+          .filter((id) => ObjectId.isValid(id))
+          .map((id) => new ObjectId(id));
+
+        const stories = await db
+          .collection("stories")
+          .find({ _id: { $in: storyIds } })
+          .toArray();
+
+        const storyMap = {};
+        stories.forEach((s) => {
+          storyMap[s._id.toString()] = s;
+        });
+
+        const enriched = history
+          .map((h) => {
+            const story = storyMap[h.storyId];
+            if (!story) return null;
+            return {
+              storyId: h.storyId,
+              title: story.title,
+              author: story.author,
+              coverImageUrl: story.coverImageUrl || story.coverImage || "",
+              categoryName: story.categoryName || "",
+              lastReadSentence: h.lastReadSentence || 0,
+              totalSentences: h.totalSentences || 0,
+              progress: h.progress || 0,
+              updatedAt: h.updatedAt,
+              startedAt: h.startedAt,
+            };
+          })
+          .filter(Boolean)
+          .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+
         resolve({
           status: 200,
           message: "Reading history fetched",
-          data: user.readingHistory || [],
+          data: enriched,
         });
       })
       .catch((error) => {

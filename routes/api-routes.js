@@ -59,7 +59,7 @@ router.post(
 
 /* ============== USER - READING PROGRESS ============== */
 router.get(
-  "/reading-history",
+  "/reading-history/:userId",
 
   userController.getReadingHistory,
 );
