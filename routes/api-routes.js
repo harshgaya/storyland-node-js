@@ -26,7 +26,7 @@ router.put("/change-password", userController.changePassword);
 router.delete("/delete-account", userController.deleteAccount);
 
 /* ============== USER - STORIES (browse) ============== */
-router.get("/home", userController.getHomeFeed);
+router.get("/home/:userId", userController.getHomeFeed);
 router.get("/stories", userController.getStoriesByCategory);
 router.get("/search-stories", userController.searchStories);
 router.get("/story/:storyId", userController.getStoryDetails);

@@ -135,7 +135,7 @@ module.exports = {
 
   getHomeFeed: (req, res, next) => {
     userService
-      .getHomeFeed({ userId: req.userId })
+      .getHomeFeed({ userId: req.params.userId })
       .then((result) => {
         res.status(result.status || 200).send(result);
       })

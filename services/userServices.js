@@ -539,43 +539,59 @@ const getHomeFeed = (data) => {
   return new Promise((resolve, reject) => {
     const db = getDb();
     Promise.all([
-      // Featured/recent published stories
+      // Featured/recent published stories (limited to 10 for display)
       db
         .collection("stories")
         .find({ status: "published" })
         .sort({ createdAt: -1 })
         .limit(10)
         .toArray(),
+      // Real total count of published stories
+      db.collection("stories").countDocuments({ status: "published" }),
       // All active categories
       db.collection("categories").find({ isActive: true }).toArray(),
       // User's reading history if userId provided
-      data && data.userId
+      data && data.userId && ObjectId.isValid(data.userId)
         ? db.collection("users").findOne({ _id: new ObjectId(data.userId) })
         : Promise.resolve(null),
     ])
-      .then(([stories, categories, user]) => {
+      .then(([stories, totalStories, categories, user]) => {
+        const COMPLETED_THRESHOLD = 0.95;
+
         let resumeStories = [];
         let continueReading = null;
-        if (user && user.readingHistory && user.readingHistory.length > 0) {
-          const inProgressIds = user.readingHistory
-            .filter((h) => h.progress < 1)
-            .map((h) => new ObjectId(h.storyId));
-          // We'll just send the IDs; client can fetch details if needed
-          resumeStories = user.readingHistory.filter((h) => h.progress < 1);
+        let storiesCompleted = 0;
+
+        if (user && Array.isArray(user.readingHistory)) {
+          // Unfinished = progress under the completion threshold
+          resumeStories = user.readingHistory.filter(
+            (h) => (h.progress || 0) < COMPLETED_THRESHOLD,
+          );
+
+          // Sort unfinished by most recently updated first
+          resumeStories.sort((a, b) => {
+            const aDate = new Date(a.updatedAt || a.startedAt || 0).getTime();
+            const bDate = new Date(b.updatedAt || b.startedAt || 0).getTime();
+            return bDate - aDate;
+          });
+
           if (resumeStories.length > 0) {
             continueReading = resumeStories[0];
           }
+
+          // Completed = progress at or above the threshold
+          storiesCompleted = user.readingHistory.filter(
+            (h) => (h.progress || 0) >= COMPLETED_THRESHOLD,
+          ).length;
         }
+
         resolve({
           status: 200,
           message: "Home feed fetched",
           data: [
             {
-              totalStories: stories.length,
-              storiesCompleted:
-                user && user.readingHistory
-                  ? user.readingHistory.filter((h) => h.progress >= 1).length
-                  : 0,
+              totalStories: totalStories,
+              storiesCompleted: storiesCompleted,
               resumeStoriesCount: resumeStories.length,
               continueReading,
               featuredStories: stories,
