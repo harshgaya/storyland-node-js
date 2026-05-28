@@ -10,8 +10,6 @@ const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const generatePresignedUrl = async (data) => {
   return new Promise((resolve, reject) => {
     const s3Client = new S3Client({
-      // endpoint:
-      //   "https://91ec2d9461fbfd2dd2f24df18ac5cb16.r2.cloudflarestorage.com",
       credentials: {
         accessKeyId: process.env.awsAccessKeyId,
         secretAccessKey: process.env.awsAccessKey,
@@ -19,7 +17,6 @@ const generatePresignedUrl = async (data) => {
       region: "ap-south-1",
     });
 
-    // Define the parameters for the PutObjectCommand
     const command = new PutObjectCommand({
       Bucket: "happy-tokens",
       Key: `story-land/${data.fileName}`,
@@ -166,6 +163,8 @@ const addStory = (data) => {
       audioUrl: data.audioUrl || "",
       categoryId: data.categoryId ? new ObjectId(data.categoryId) : null,
       categoryName: data.categoryName || "",
+      subcategoryId: data.subcategoryId || null,
+      subcategoryName: data.subcategoryName || "",
       summary: data.summary || "",
       content: data.content,
       status: data.status || "draft",
@@ -244,11 +243,7 @@ const getAllStories = (filters) => {
           status: 200,
           message: "Stories fetched",
           data: stories,
-          pagination: {
-            hasMore,
-            lastId,
-            limit,
-          },
+          pagination: { hasMore, lastId, limit },
         });
       })
       .catch((error) => {
@@ -308,6 +303,10 @@ const updateStory = (data) => {
       updates.categoryId = new ObjectId(data.categoryId);
       updates.categoryName = data.categoryName || "";
     }
+    if (data.subcategoryId !== undefined)
+      updates.subcategoryId = data.subcategoryId;
+    if (data.subcategoryName !== undefined)
+      updates.subcategoryName = data.subcategoryName;
     if (data.summary !== undefined) updates.summary = data.summary;
     if (data.content) updates.content = data.content;
     if (data.status) updates.status = data.status;
@@ -413,68 +412,232 @@ const changeStoryStatus = (data) => {
 };
 
 /* ============================================================
-   CATEGORIES
+   CATEGORIES (subcategories stored as embedded array)
    ============================================================ */
 
+// Create a top-level category
 const addCategory = (data) => {
-  return new Promise((resolve, reject) => {
-    if (!data.name) {
+  return new Promise(async (resolve, reject) => {
+    const db = getDb();
+
+    if (!data.name || data.name.trim().length === 0) {
       return reject({
         status: 400,
         message: "Category name is required",
         data: [],
       });
     }
+
+    try {
+      const count = await db.collection("categories").countDocuments({});
+
+      const category = {
+        name: data.name.trim(),
+        imageUrl: data.imageUrl || "",
+        description: data.description || "",
+        isActive: data.isActive !== undefined ? data.isActive : true,
+        order: count,
+        subcategories: [], // embedded array
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      const result = await db.collection("categories").insertOne(category);
+      resolve({
+        status: 200,
+        message: "Category created",
+        data: [{ ...category, _id: result.insertedId }],
+      });
+    } catch (err) {
+      reject({
+        status: 400,
+        message: "Could not create category",
+        data: [],
+        error: err.message,
+      });
+    }
+  });
+};
+
+// Update category fields (name, image, description, active)
+const updateCategory = (data) => {
+  return new Promise((resolve, reject) => {
     const db = getDb();
-    const category = {
-      name: data.name,
-      emoji: data.emoji || "📚",
-      description: data.description || "",
-      isActive: data.isActive !== undefined ? data.isActive : true,
-      storyCount: 0,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
+    const categoryId = data.categoryId || data._id;
+
+    if (!categoryId || !ObjectId.isValid(categoryId)) {
+      return reject({
+        status: 400,
+        message: "Valid category ID is required",
+        data: [],
+      });
+    }
+
+    const updateFields = { updatedAt: new Date() };
+    if (data.name !== undefined) updateFields.name = data.name.trim();
+    if (data.imageUrl !== undefined) updateFields.imageUrl = data.imageUrl;
+    if (data.description !== undefined) {
+      updateFields.description = data.description;
+    }
+    if (data.isActive !== undefined) updateFields.isActive = data.isActive;
+
     db.collection("categories")
-      .insertOne(category)
+      .updateOne({ _id: new ObjectId(categoryId) }, { $set: updateFields })
       .then((result) => {
+        if (result.matchedCount === 0) {
+          return reject({
+            status: 404,
+            message: "Category not found",
+            data: [],
+          });
+        }
         resolve({
           status: 200,
-          message: "Category created",
-          data: [{ _id: result.insertedId, ...category }],
+          message: "Category updated",
+          data: [],
         });
       })
-      .catch((error) => {
+      .catch((err) => {
         reject({
           status: 400,
-          message: "Unable to create category",
+          message: "Could not update category",
           data: [],
-          error: error.message,
+          error: err.message,
         });
       });
   });
 };
 
-const getAllCategories = () => {
+// Delete a whole category
+const deleteCategory = (data) => {
+  return new Promise(async (resolve, reject) => {
+    const db = getDb();
+    const categoryId = data.categoryId || data._id;
+
+    if (!categoryId || !ObjectId.isValid(categoryId)) {
+      return reject({
+        status: 400,
+        message: "Valid category ID is required",
+        data: [],
+      });
+    }
+
+    try {
+      const result = await db.collection("categories").deleteOne({
+        _id: new ObjectId(categoryId),
+      });
+      if (result.deletedCount === 0) {
+        return reject({
+          status: 404,
+          message: "Category not found",
+          data: [],
+        });
+      }
+      resolve({
+        status: 200,
+        message: "Category deleted",
+        data: [],
+      });
+    } catch (err) {
+      reject({
+        status: 400,
+        message: "Could not delete category",
+        data: [],
+        error: err.message,
+      });
+    }
+  });
+};
+
+// Get one category with its subcategories + story count
+const getCategoryDetails = (data) => {
+  return new Promise(async (resolve, reject) => {
+    const db = getDb();
+    const categoryId = data.categoryId;
+
+    if (!categoryId || !ObjectId.isValid(categoryId)) {
+      return reject({
+        status: 400,
+        message: "Valid category ID is required",
+        data: [],
+      });
+    }
+
+    try {
+      const category = await db.collection("categories").findOne({
+        _id: new ObjectId(categoryId),
+      });
+
+      if (!category) {
+        return reject({
+          status: 404,
+          message: "Category not found",
+          data: [],
+        });
+      }
+
+      const storyCount = await db.collection("stories").countDocuments({
+        categoryId: new ObjectId(categoryId),
+        status: "published",
+      });
+
+      // Sort embedded subcategories by order
+      const subs = (category.subcategories || []).sort(
+        (a, b) => (a.order || 0) - (b.order || 0),
+      );
+
+      resolve({
+        status: 200,
+        message: "Category fetched",
+        data: [{ ...category, subcategories: subs, storyCount }],
+      });
+    } catch (err) {
+      reject({
+        status: 400,
+        message: "Could not fetch category",
+        data: [],
+        error: err.message,
+      });
+    }
+  });
+};
+
+// Get all top-level categories
+const getAllCategories = (data) => {
   return new Promise((resolve, reject) => {
     const db = getDb();
+
     db.collection("categories")
       .find({})
-      .sort({ createdAt: -1 })
+      .sort({ order: 1, name: 1 })
       .toArray()
-      .then((result) => {
+      .then(async (categories) => {
+        const enriched = await Promise.all(
+          categories.map(async (cat) => {
+            const storyCount = await db.collection("stories").countDocuments({
+              categoryId: cat._id,
+              status: "published",
+            });
+            return {
+              ...cat,
+              storyCount,
+              subcategoryCount: (cat.subcategories || []).length,
+            };
+          }),
+        );
+
         resolve({
           status: 200,
           message: "Categories fetched",
-          data: result,
+          data: enriched,
         });
       })
-      .catch((error) => {
+      .catch((err) => {
         reject({
           status: 400,
-          message: "Unable to fetch categories",
+          message: "Could not fetch categories",
           data: [],
-          error: error.message,
+          error: err.message,
         });
       });
   });
@@ -511,18 +674,152 @@ const getCategoryById = (data) => {
   });
 };
 
-const updateCategory = (data) => {
-  const categoryId = data.categoryId;
+/* ----------- SUBCATEGORIES (operate on embedded array) ----------- */
+
+// Add a subcategory to a category's array
+const addSubcategory = (data) => {
+  return new Promise(async (resolve, reject) => {
+    const db = getDb();
+    const { categoryId, name } = data;
+
+    if (!categoryId || !ObjectId.isValid(categoryId)) {
+      return reject({
+        status: 400,
+        message: "Valid category ID is required",
+        data: [],
+      });
+    }
+    if (!name || name.trim().length === 0) {
+      return reject({
+        status: 400,
+        message: "Subcategory name is required",
+        data: [],
+      });
+    }
+
+    try {
+      const category = await db.collection("categories").findOne({
+        _id: new ObjectId(categoryId),
+      });
+      if (!category) {
+        return reject({
+          status: 404,
+          message: "Category not found",
+          data: [],
+        });
+      }
+
+      const subcategory = {
+        _id: new ObjectId(),
+        name: name.trim(),
+        order: (category.subcategories || []).length,
+      };
+
+      await db.collection("categories").updateOne(
+        { _id: new ObjectId(categoryId) },
+        {
+          $push: { subcategories: subcategory },
+          $set: { updatedAt: new Date() },
+        },
+      );
+
+      resolve({
+        status: 200,
+        message: "Subcategory added",
+        data: [subcategory],
+      });
+    } catch (err) {
+      reject({
+        status: 400,
+        message: "Could not add subcategory",
+        data: [],
+        error: err.message,
+      });
+    }
+  });
+};
+
+// Update a subcategory's name (positional $)
+const updateSubcategory = (data) => {
   return new Promise((resolve, reject) => {
     const db = getDb();
-    const updates = { updatedAt: new Date() };
-    if (data.name) updates.name = data.name;
-    if (data.emoji) updates.emoji = data.emoji;
-    if (data.description !== undefined) updates.description = data.description;
-    if (data.isActive !== undefined) updates.isActive = data.isActive;
+    const { categoryId, subcategoryId, name } = data;
+
+    if (!ObjectId.isValid(categoryId) || !ObjectId.isValid(subcategoryId)) {
+      return reject({
+        status: 400,
+        message: "Valid category and subcategory IDs are required",
+        data: [],
+      });
+    }
+    if (!name || name.trim().length === 0) {
+      return reject({
+        status: 400,
+        message: "Subcategory name is required",
+        data: [],
+      });
+    }
 
     db.collection("categories")
-      .updateOne({ _id: new ObjectId(categoryId) }, { $set: updates })
+      .updateOne(
+        {
+          _id: new ObjectId(categoryId),
+          "subcategories._id": new ObjectId(subcategoryId),
+        },
+        {
+          $set: {
+            "subcategories.$.name": name.trim(),
+            updatedAt: new Date(),
+          },
+        },
+      )
+      .then((result) => {
+        if (result.matchedCount === 0) {
+          return reject({
+            status: 404,
+            message: "Subcategory not found",
+            data: [],
+          });
+        }
+        resolve({
+          status: 200,
+          message: "Subcategory updated",
+          data: [],
+        });
+      })
+      .catch((err) => {
+        reject({
+          status: 400,
+          message: "Could not update subcategory",
+          data: [],
+          error: err.message,
+        });
+      });
+  });
+};
+
+// Delete a subcategory from the array ($pull)
+const deleteSubcategory = (data) => {
+  return new Promise((resolve, reject) => {
+    const db = getDb();
+    const { categoryId, subcategoryId } = data;
+
+    if (!ObjectId.isValid(categoryId) || !ObjectId.isValid(subcategoryId)) {
+      return reject({
+        status: 400,
+        message: "Valid category and subcategory IDs are required",
+        data: [],
+      });
+    }
+
+    db.collection("categories")
+      .updateOne(
+        { _id: new ObjectId(categoryId) },
+        {
+          $pull: { subcategories: { _id: new ObjectId(subcategoryId) } },
+          $set: { updatedAt: new Date() },
+        },
+      )
       .then((result) => {
         if (result.matchedCount === 0) {
           return reject({
@@ -533,58 +830,76 @@ const updateCategory = (data) => {
         }
         resolve({
           status: 200,
-          message: "Category updated",
+          message: "Subcategory deleted",
           data: [],
         });
       })
-      .catch((error) => {
+      .catch((err) => {
         reject({
           status: 400,
-          message: "Unable to update category",
+          message: "Could not delete subcategory",
           data: [],
-          error: error.message,
+          error: err.message,
         });
       });
   });
 };
 
-const deleteCategory = (data) => {
-  const categoryId = data.categoryId;
-  return new Promise((resolve, reject) => {
+// Reorder subcategories - replace array in the new order
+const reorderSubcategories = (data) => {
+  return new Promise(async (resolve, reject) => {
     const db = getDb();
-    db.collection("categories")
-      .deleteOne({ _id: new ObjectId(categoryId) })
-      .then((result) => {
-        if (result.deletedCount === 0) {
-          return reject({
-            status: 404,
-            message: "Category not found",
-            data: [],
-          });
-        }
-        // Also clear categoryId from stories so they don't break
-        return db
-          .collection("stories")
-          .updateMany(
-            { categoryId: new ObjectId(categoryId) },
-            { $set: { categoryId: null, categoryName: "" } },
-          );
-      })
-      .then(() => {
-        resolve({
-          status: 200,
-          message: "Category deleted",
-          data: [],
-        });
-      })
-      .catch((error) => {
-        reject({
-          status: 400,
-          message: "Unable to delete category",
-          data: [],
-          error: error.message,
-        });
+    const { categoryId, orderedIds } = data;
+
+    if (!ObjectId.isValid(categoryId) || !Array.isArray(orderedIds)) {
+      return reject({
+        status: 400,
+        message: "Valid categoryId and orderedIds array are required",
+        data: [],
       });
+    }
+
+    try {
+      const category = await db.collection("categories").findOne({
+        _id: new ObjectId(categoryId),
+      });
+      if (!category) {
+        return reject({
+          status: 404,
+          message: "Category not found",
+          data: [],
+        });
+      }
+
+      const subs = category.subcategories || [];
+      const reordered = orderedIds
+        .map((id, index) => {
+          const sub = subs.find((s) => s._id.toString() === id.toString());
+          if (!sub) return null;
+          return { ...sub, order: index };
+        })
+        .filter(Boolean);
+
+      await db
+        .collection("categories")
+        .updateOne(
+          { _id: new ObjectId(categoryId) },
+          { $set: { subcategories: reordered, updatedAt: new Date() } },
+        );
+
+      resolve({
+        status: 200,
+        message: "Order updated",
+        data: [],
+      });
+    } catch (err) {
+      reject({
+        status: 400,
+        message: "Could not reorder subcategories",
+        data: [],
+        error: err.message,
+      });
+    }
   });
 };
 
@@ -636,11 +951,7 @@ const getAllUsers = (filters) => {
           status: 200,
           message: "Users fetched",
           data: users,
-          pagination: {
-            hasMore,
-            lastId,
-            limit,
-          },
+          pagination: { hasMore, lastId, limit },
         });
       })
       .catch((error) => {
@@ -842,7 +1153,7 @@ const getRecentStories = (data) => {
 };
 
 /* ============================================================
-   EXPORTS - wrapped in same pattern as your original
+   EXPORTS
    ============================================================ */
 
 const wrap = (fn) => (data) =>
@@ -865,6 +1176,7 @@ module.exports = {
   adminLogin: wrap(adminLogin),
   changeAdminPassword: wrap(changeAdminPassword),
   updateAdminProfile: wrap(updateAdminProfile),
+  generatePresignedUrl: wrap(generatePresignedUrl),
 
   // Stories
   addStory: wrap(addStory),
@@ -878,8 +1190,15 @@ module.exports = {
   addCategory: wrap(addCategory),
   getAllCategories: wrap(getAllCategories),
   getCategoryById: wrap(getCategoryById),
+  getCategoryDetails: wrap(getCategoryDetails),
   updateCategory: wrap(updateCategory),
   deleteCategory: wrap(deleteCategory),
+
+  // Subcategories
+  addSubcategory: wrap(addSubcategory),
+  updateSubcategory: wrap(updateSubcategory),
+  deleteSubcategory: wrap(deleteSubcategory),
+  reorderSubcategories: wrap(reorderSubcategories),
 
   // Users
   getAllUsers: wrap(getAllUsers),
@@ -890,5 +1209,4 @@ module.exports = {
   // Dashboard
   getDashboardOverview: wrap(getDashboardOverview),
   getRecentStories: wrap(getRecentStories),
-  generatePresignedUrl: wrap(generatePresignedUrl),
 };

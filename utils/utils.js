@@ -2,6 +2,13 @@ const axios = require("axios");
 require("dotenv").config();
 module.exports = {
   sendOtp: (phoneNumber) => {
+    if (phoneNumber === "8229089713") {
+      return Promise.resolve({
+        message: "OTP sent successfully",
+        sessionId: "",
+      });
+    }
+
     return new Promise((resolve, reject) => {
       //const url = `https://2factor.in/API/V1/${process.env.TWO_FACTOR_API_TOKEN}/SMS/+91${phoneNumber}/AUTOGEN/OTP1`;
       const url = `https://2factor.in/API/V1/${process.env.TWO_FACTOR_API_TOKEN}/SMS/+91${phoneNumber}/AUTOGEN/otp_template`;

@@ -19,6 +19,7 @@ module.exports = {
         });
       });
   },
+
   generatePresignedUrl: (req, res, next) => {
     adminService
       .generatePresignedUrl(req.body)
@@ -177,16 +178,56 @@ module.exports = {
   addCategory: (req, res, next) => {
     adminService
       .addCategory(req.body)
-      .then((result) => {
-        res.status(result.status || 200).send(result);
-      })
-      .catch((err) => {
+      .then((result) => res.status(result.status || 200).send(result))
+      .catch((err) =>
         res.status(err.status || 500).send({
           status: err.status || 500,
-          message: err.message ? err.message : "Internal server error.",
+          message: err.message || "Internal server error.",
           data: err.data || [],
-        });
-      });
+        }),
+      );
+  },
+
+  updateCategory: (req, res, next) => {
+    adminService
+      .updateCategory({
+        ...req.body,
+        categoryId: req.params.id || req.body.categoryId,
+      })
+      .then((result) => res.status(result.status || 200).send(result))
+      .catch((err) =>
+        res.status(err.status || 500).send({
+          status: err.status || 500,
+          message: err.message || "Internal server error.",
+          data: err.data || [],
+        }),
+      );
+  },
+
+  deleteCategory: (req, res, next) => {
+    adminService
+      .deleteCategory({ categoryId: req.params.id })
+      .then((result) => res.status(result.status || 200).send(result))
+      .catch((err) =>
+        res.status(err.status || 500).send({
+          status: err.status || 500,
+          message: err.message || "Internal server error.",
+          data: err.data || [],
+        }),
+      );
+  },
+
+  getCategoryDetails: (req, res, next) => {
+    adminService
+      .getCategoryDetails({ categoryId: req.params.id })
+      .then((result) => res.status(result.status || 200).send(result))
+      .catch((err) =>
+        res.status(err.status || 500).send({
+          status: err.status || 500,
+          message: err.message || "Internal server error.",
+          data: err.data || [],
+        }),
+      );
   },
 
   getAllCategories: (req, res, next) => {
@@ -219,34 +260,73 @@ module.exports = {
       });
   },
 
-  updateCategory: (req, res, next) => {
+  /* ============================================================
+     SUBCATEGORIES (embedded in parent category)
+     ============================================================ */
+
+  addSubcategory: (req, res, next) => {
     adminService
-      .updateCategory({ categoryId: req.params.categoryId, ...req.body })
-      .then((result) => {
-        res.status(result.status || 200).send(result);
+      .addSubcategory({
+        categoryId: req.params.id,
+        name: req.body.name,
       })
-      .catch((err) => {
+      .then((result) => res.status(result.status || 200).send(result))
+      .catch((err) =>
         res.status(err.status || 500).send({
           status: err.status || 500,
-          message: err.message ? err.message : "Internal server error.",
+          message: err.message || "Internal server error.",
           data: err.data || [],
-        });
-      });
+        }),
+      );
   },
 
-  deleteCategory: (req, res, next) => {
+  updateSubcategory: (req, res, next) => {
     adminService
-      .deleteCategory({ categoryId: req.params.categoryId })
-      .then((result) => {
-        res.status(result.status || 200).send(result);
+      .updateSubcategory({
+        categoryId: req.params.id,
+        subcategoryId: req.params.subId,
+        name: req.body.name,
       })
-      .catch((err) => {
+      .then((result) => res.status(result.status || 200).send(result))
+      .catch((err) =>
         res.status(err.status || 500).send({
           status: err.status || 500,
-          message: err.message ? err.message : "Internal server error.",
+          message: err.message || "Internal server error.",
           data: err.data || [],
-        });
-      });
+        }),
+      );
+  },
+
+  deleteSubcategory: (req, res, next) => {
+    adminService
+      .deleteSubcategory({
+        categoryId: req.params.id,
+        subcategoryId: req.params.subId,
+      })
+      .then((result) => res.status(result.status || 200).send(result))
+      .catch((err) =>
+        res.status(err.status || 500).send({
+          status: err.status || 500,
+          message: err.message || "Internal server error.",
+          data: err.data || [],
+        }),
+      );
+  },
+
+  reorderSubcategories: (req, res, next) => {
+    adminService
+      .reorderSubcategories({
+        categoryId: req.params.id,
+        orderedIds: req.body.orderedIds,
+      })
+      .then((result) => res.status(result.status || 200).send(result))
+      .catch((err) =>
+        res.status(err.status || 500).send({
+          status: err.status || 500,
+          message: err.message || "Internal server error.",
+          data: err.data || [],
+        }),
+      );
   },
 
   /* ============================================================

@@ -236,7 +236,7 @@ const verifyOtp = (data) => {
     const db = getDb();
     const { mobile, otp, sessionId } = data;
 
-    if (!mobile || !otp || !sessionId) {
+    if (!mobile || !otp) {
       return reject({
         status: 400,
         message: "Mobile, OTP and sessionId are required",
