@@ -562,7 +562,6 @@ const getHomeFeed = (data) => {
         let storiesCompleted = 0;
 
         if (user && Array.isArray(user.readingHistory)) {
-          // Unfinished = progress under the completion threshold
           resumeStories = user.readingHistory.filter(
             (h) => (h.progress || 0) < COMPLETED_THRESHOLD,
           );
