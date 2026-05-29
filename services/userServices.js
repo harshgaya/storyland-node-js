@@ -539,18 +539,17 @@ const getHomeFeed = (data) => {
   return new Promise((resolve, reject) => {
     const db = getDb();
     Promise.all([
-      // Featured/recent published stories (limited to 10 for display)
       db
         .collection("stories")
         .find({ status: "published" })
         .sort({ createdAt: -1 })
         .limit(10)
         .toArray(),
-      // Real total count of published stories
+
       db.collection("stories").countDocuments({ status: "published" }),
-      // All active categories
+
       db.collection("categories").find({ isActive: true }).toArray(),
-      // User's reading history if userId provided
+
       data && data.userId && ObjectId.isValid(data.userId)
         ? db.collection("users").findOne({ _id: new ObjectId(data.userId) })
         : Promise.resolve(null),
