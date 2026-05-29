@@ -554,19 +554,19 @@ const getHomeFeed = (data) => {
         ? db.collection("users").findOne({ _id: new ObjectId(data.userId) })
         : Promise.resolve(null),
     ])
-      .then(([stories, totalStories, categories, user]) => {
-        const COMPLETED_THRESHOLD = 0.95;
+      .then(async ([stories, totalStories, categories, user]) => {
+        const COMPLETED_THRESHOLD = 1;
 
         let resumeStories = [];
         let continueReading = null;
         let storiesCompleted = 0;
 
         if (user && Array.isArray(user.readingHistory)) {
+          // Unfinished stories
           resumeStories = user.readingHistory.filter(
             (h) => (h.progress || 0) < COMPLETED_THRESHOLD,
           );
 
-          // Sort unfinished by most recently updated first
           resumeStories.sort((a, b) => {
             const aDate = new Date(a.updatedAt || a.startedAt || 0).getTime();
             const bDate = new Date(b.updatedAt || b.startedAt || 0).getTime();
@@ -577,11 +577,27 @@ const getHomeFeed = (data) => {
             continueReading = resumeStories[0];
           }
 
-          // Completed = progress at or above the threshold
-          storiesCompleted = user.readingHistory.filter(
-            (h) => (h.progress || 0) >= COMPLETED_THRESHOLD,
-          ).length;
+          // Get storyIds where progress === 1
+          const completedEntries = user.readingHistory.filter(
+            (h) => (h.progress || 0) === COMPLETED_THRESHOLD,
+          );
+
+          if (completedEntries.length > 0) {
+            // Only count stories that still exist in the stories collection
+            const completedIds = completedEntries
+              .filter(
+                (h) => h.storyId && ObjectId.isValid(h.storyId.toString()),
+              )
+              .map((h) => new ObjectId(h.storyId.toString()));
+
+            storiesCompleted = await db
+              .collection("stories")
+              .countDocuments({ _id: { $in: completedIds } });
+          }
         }
+
+        console.log("Home feed - completed:", storiesCompleted);
+        console.log("Home feed - resume:", resumeStories.length);
 
         resolve({
           status: 200,
@@ -800,30 +816,91 @@ const searchStories = (data) => {
 const getMyStories = (data) => {
   return new Promise((resolve, reject) => {
     const db = getDb();
-    const userObjId = toObjectId(data.userId);
+    const userId = data.userId;
 
-    console.log("getMyStories - userId:", data.userId);
-    console.log("getMyStories - userObjId:", userObjId);
-
-    const filter = { authorId: userObjId };
-    if (data.tab && data.tab !== "All") {
-      if (data.tab === "Ongoing") filter.status = "ongoing";
-      if (data.tab === "Completed") filter.status = "published";
-      if (data.tab === "Drafts") filter.status = "draft";
+    if (!userId || !ObjectId.isValid(userId)) {
+      return reject({
+        status: 400,
+        message: "Valid userId is required",
+        data: [],
+      });
     }
 
-    console.log("getMyStories - filter:", JSON.stringify(filter));
+    db.collection("users")
+      .findOne(
+        { _id: new ObjectId(userId) },
+        { projection: { readingHistory: 1 } },
+      )
+      .then(async (user) => {
+        if (
+          !user ||
+          !Array.isArray(user.readingHistory) ||
+          user.readingHistory.length === 0
+        ) {
+          return resolve({
+            status: 200,
+            message: "My stories fetched",
+            data: [],
+          });
+        }
 
-    db.collection("stories")
-      .find(filter)
-      .sort({ updatedAt: -1 })
-      .toArray()
-      .then((result) => {
-        console.log("getMyStories - found", result.length, "stories");
+        // Get all storyIds from history
+        const storyIds = user.readingHistory
+          .filter((h) => h.storyId && ObjectId.isValid(h.storyId.toString()))
+          .map((h) => new ObjectId(h.storyId.toString()));
+
+        // Fetch all stories in one query
+        const stories = await db
+          .collection("stories")
+          .find(
+            { _id: { $in: storyIds } },
+            {
+              projection: {
+                title: 1,
+                author: 1,
+                coverImageUrl: 1,
+                categoryName: 1,
+              },
+            },
+          )
+          .toArray();
+
+        // Build a lookup map by storyId string
+        const storyMap = {};
+        for (const s of stories) {
+          storyMap[s._id.toString()] = s;
+        }
+
+        // Enrich each history entry with story fields
+        const enriched = user.readingHistory
+          .filter((h) => h.storyId)
+          .map((h) => {
+            const sid = h.storyId.toString();
+            const story = storyMap[sid] || {};
+            return {
+              storyId: sid,
+              title: story.title || "Untitled",
+              author: story.author || "",
+              coverImageUrl: story.coverImageUrl || "",
+              categoryName: story.categoryName || "",
+              progress: h.progress || 0,
+              lastReadSentence: h.lastReadSentence || 0,
+              totalSentences: h.totalSentences || 0,
+              startedAt: h.startedAt || null,
+              completedAt: h.completedAt || null,
+              updatedAt: h.updatedAt || h.startedAt || null,
+            };
+          })
+          .sort((a, b) => {
+            const aDate = new Date(a.updatedAt || 0).getTime();
+            const bDate = new Date(b.updatedAt || 0).getTime();
+            return bDate - aDate;
+          });
+
         resolve({
           status: 200,
           message: "My stories fetched",
-          data: result,
+          data: enriched,
         });
       })
       .catch((error) => {
